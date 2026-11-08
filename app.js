@@ -27,6 +27,30 @@ function readProduct() {
   return { name, model, site: location.hostname };
 }
 
+function renderSearches() {
+  const name = get('query').value.trim();
+  const searches = get('searches');
+  searches.replaceChildren();
+  if (!name) return;
+  for (const [label, suffix] of [['New', 'new'], ['Refurbished', 'refurbished'], ['Used', 'used']]) {
+    if (searches.childNodes.length) searches.append(' · ');
+    const url = new URL('https://www.google.com/search');
+    url.searchParams.set('q', name + ' ' + suffix);
+    addLink(searches, 'Search ' + label.toLowerCase(), url);
+  }
+}
+
+get('query').addEventListener('input', renderSearches);
+
+function identifyJbl(url) {
+  if (!url) return null;
+  const { hostname, pathname } = new URL(url);
+  if (hostname === 'uk.jbl.com' && /^\/CHARGE-6\.html$/i.test(pathname)) {
+    return { name: 'JBL Charge 6', site: hostname };
+  }
+  return null;
+}
+
 function updateAvailability() {
   button.disabled = !get('sample').checked && detected?.model !== 'WH-1000XM5';
   get('results').replaceChildren();
@@ -40,16 +64,23 @@ button.disabled = true;
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error('No active tab');
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id }, func: readProduct
-    });
-    detected = result;
+    detected = identifyJbl(tab.url);
+    if (!detected) {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id }, func: readProduct
+      });
+      detected = result;
+    }
+    if (detected?.name && !get('query').value) {
+      get('query').value = detected.name;
+      renderSearches();
+    }
     get('product').textContent = detected?.name
       ? 'Detected on ' + detected.site + ': ' + detected.name +
-        (detected.model ? ' · ' + detected.model : ' · Sample comparisons unavailable for this product.')
+        (detected.model ? ' · ' + detected.model : '')
       : 'No product detected on ' + (detected?.site || 'this tab') + '.';
   } catch {
-    get('product').textContent = 'Open a retailer product page, then reopen the extension to detect it.';
+    get('product').textContent = 'Chrome couldn’t read this tab. You can enter the product name below.';
   } finally {
     updateAvailability();
   }
