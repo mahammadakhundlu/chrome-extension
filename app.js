@@ -3,6 +3,57 @@ import { compare } from './rank.mjs';
 const get = id => document.getElementById(id);
 const money = pence => new Intl.NumberFormat('en-GB', { style:'currency', currency:'GBP' }).format(pence / 100);
 const trace = get('trace');
+const button = document.querySelector('button');
+let detected;
+
+function readProduct() {
+  const products = [];
+  function visit(value) {
+    if (!value || typeof value !== 'object') return;
+    if ([value['@type']].flat().includes('Product') && typeof value.name === 'string') {
+      products.push(value);
+    }
+    Object.values(value).forEach(visit);
+  }
+  for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+    try { visit(JSON.parse(script.textContent)); } catch { /* Ignore invalid metadata. */ }
+  }
+  const modelPattern = /\bWH[-\s]?1000XM5\b/i;
+  const heading = document.querySelector('h1')?.textContent?.trim();
+  const product = products.find(item => item.name.trim() === heading) ||
+    (products.length === 1 ? products[0] : null);
+  const name = product?.name || (modelPattern.test(heading || '') ? heading : '');
+  const model = modelPattern.test([name, product?.model, product?.mpn].join(' ')) ? 'WH-1000XM5' : '';
+  return { name, model, site: location.hostname };
+}
+
+function updateAvailability() {
+  button.disabled = !get('sample').checked && detected?.model !== 'WH-1000XM5';
+  get('results').replaceChildren();
+  trace.replaceChildren();
+  get('status').textContent = '';
+}
+
+get('sample').addEventListener('change', updateAvailability);
+button.disabled = true;
+(async () => {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error('No active tab');
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id }, func: readProduct
+    });
+    detected = result;
+    get('product').textContent = detected?.name
+      ? 'Detected on ' + detected.site + ': ' + detected.name +
+        (detected.model ? ' · ' + detected.model : ' · Sample comparisons unavailable for this product.')
+      : 'No product detected on ' + (detected?.site || 'this tab') + '.';
+  } catch {
+    get('product').textContent = 'Open a retailer product page, then reopen the extension to detect it.';
+  } finally {
+    updateAvailability();
+  }
+})();
 
 function addLink(container, label, url) {
   const link = document.createElement('a');
@@ -62,8 +113,9 @@ async function collect() {
 
 document.querySelector('form').addEventListener('submit', async event => {
   event.preventDefault();
-  const button = document.querySelector('button');
+  if (button.disabled) return;
   button.disabled = true;
+  get('sample').disabled = true;
   trace.replaceChildren();
   get('results').replaceChildren();
   get('status').textContent = 'Checking sample pages…';
@@ -102,6 +154,7 @@ document.querySelector('form').addEventListener('submit', async event => {
   } catch (error) {
     get('status').textContent = error.message;
   } finally {
-    button.disabled = false;
+    get('sample').disabled = false;
+    button.disabled = !get('sample').checked && detected?.model !== 'WH-1000XM5';
   }
 });
